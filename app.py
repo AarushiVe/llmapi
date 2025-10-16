@@ -131,11 +131,5 @@ def api_endpoint():
         "url": pages_url
     }), 200
 
-@app.route("/logs", methods=["GET"])
-def logs():
-    if os.path.exists("tasks.json"):
-        with open("tasks.json") as f:
-            return f.read(), 200, {"Content-Type": "application/json"}
-    return jsonify({"message": "No logs yet"}), 200
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
