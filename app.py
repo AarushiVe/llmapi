@@ -85,7 +85,7 @@ def api_endpoint():
 
     pages_url = f"https://{GITHUB_USER}.github.io/{repo_name}/"
 
-    # ---- 6️⃣ Notify Evaluation URL ----
+        # ---- 6️⃣ Notify Evaluation URL ----
     if evaluation_url:
         payload = {
             "email": email,
@@ -101,6 +101,28 @@ def api_endpoint():
             res.raise_for_status()
         except Exception as e:
             print("Evaluation notify failed:", e)
+
+    # ---- 7️⃣ Log Task History ----
+    log_entry = {
+        "email": email,
+        "task": task,
+        "round": round_num,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "repo_url": f"https://github.com/{GITHUB_USER}/{repo_name}",
+        "pages_url": pages_url
+    }
+
+    try:
+        if os.path.exists("tasks.json"):
+            with open("tasks.json", "r") as f:
+                data_log = json.load(f)
+        else:
+            data_log = []
+        data_log.append(log_entry)
+        with open("tasks.json", "w") as f:
+            json.dump(data_log, f, indent=2)
+    except Exception as e:
+        print("Log write error:", e)
 
     return jsonify({
         "repo_name": repo_name,
