@@ -146,15 +146,6 @@ Permission is hereby granted, free of charge, to any person...
         return jsonify({"error": str(e)}), 500
 
 
-# --- Optional logs endpoint ---
-@app.route("/logs", methods=["GET"])
-def logs():
-    if os.path.exists("tasks.json"):
-        with open("tasks.json") as f:
-            return f.read(), 200, {"Content-Type": "application/json"}
-    return jsonify({"message": "No logs yet"}), 200
-
-
 # --- Run ---
 if __name__ == "__main__":
     app.run(debug=True)
