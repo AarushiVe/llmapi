@@ -1,151 +1,126 @@
 from flask import Flask, request, jsonify
 import os
-import json
-import requests
 import base64
+import requests
+import json
 from datetime import datetime
 
 app = Flask(__name__)
+GITHUB_USER = os.environ.get("GITHUB_USER")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+SECRET = os.environ.get("SECRET")
 
-# --- Config ---
-GITHUB_USER = os.environ.get("GITHUB_USER")  # e.g., AarushiVe
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")  # Personal Access Token
-SECRET = os.environ.get("SECRET")  # Secret for verification
+def github_put_file(repo, path, content, commit_message):
+    api = f"https://api.github.com/repos/{GITHUB_USER}/{repo}/contents/{path}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
 
-# --- Helper functions ---
-def save_tasks_log(log_entry):
-    """Append a task log to tasks.json"""
-    try:
-        if os.path.exists("tasks.json"):
-            with open("tasks.json", "r") as f:
-                data_log = json.load(f)
-        else:
-            data_log = []
-        data_log.append(log_entry)
-        with open("tasks.json", "w") as f:
-            json.dump(data_log, f, indent=2)
-    except Exception as e:
-        print("Log write error:", e)
+    # check if file exists
+    existing = requests.get(api, headers=headers)
+    sha = existing.json().get("sha") if existing.status_code == 200 else None
 
-def decode_attachments(attachments, repo_dir):
-    """Decode base64 attachments into repo folder"""
-    for attachment in attachments:
-        name = attachment.get("name")
-        data_url = attachment.get("url")
-        if not name or not data_url:
-            continue
-        try:
-            data = data_url.split(",")[1]
-            content = base64.b64decode(data)
-            path = os.path.join(repo_dir, name)
-            with open(path, "wb") as f:
-                f.write(content)
-        except Exception as e:
-            print(f"Attachment decode error ({name}):", e)
+    data = {
+        "message": commit_message,
+        "content": base64.b64encode(content.encode("utf-8")).decode(),
+    }
+    if sha:
+        data["sha"] = sha
 
-# --- Main API endpoint ---
+    r = requests.put(api, headers=headers, json=data)
+    r.raise_for_status()
+
+    return r.json()["commit"]["sha"]
+
+
+# -----------------------------------------------------------
+# Enable GitHub Pages
+# -----------------------------------------------------------
+def enable_pages(repo):
+    api = f"https://api.github.com/repos/{GITHUB_USER}/{repo}/pages"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json"
+    }
+    data = {
+        "source": {
+            "branch": "main",
+            "path": "/"
+        }
+    }
+    r = requests.post(api, headers=headers, json=data)
+    if r.status_code not in (201, 204):
+        print("Pages enable error:", r.text)
 @app.route("/api-endpoint", methods=["POST"])
 def api_endpoint():
-    try:
-        req = request.get_json(force=True)
-        email = req.get("email")
-        secret = req.get("secret")
-        task = req.get("task")
-        round_num = req.get("round", 1)
-        nonce = req.get("nonce")
-        brief = req.get("brief", "")
-        checks = req.get("checks", [])
-        evaluation_url = req.get("evaluation_url")
-        attachments = req.get("attachments", [])
+    req = request.get_json(force=True)
 
-        # --- 1️⃣ Verify secret ---
-        if secret != SECRET:
-            return jsonify({"error": "Invalid secret"}), 401
+    # 1. Secret check
+    if req.get("secret") != SECRET:
+        return jsonify({"error": "Invalid secret"}), 401
 
-        # --- 2️⃣ Generate repo name ---
-        repo_name = task.replace(" ", "-").lower()
-        pages_url = f"https://{GITHUB_USER}.github.io/{repo_name}/"
-        repo_dir = f"./{repo_name}"
+    email = req["email"]
+    task = req["task"]
+    round_num = req.get("round", 1)
+    nonce = req["nonce"]
+    brief = req["brief"]
+    evaluation_url = req["evaluation_url"]
+    repo = task.replace(" ", "-").lower()
+    repo_url = f"https://github.com/{GITHUB_USER}/{repo}"
+    pages_url = f"https://{GITHUB_USER}.github.io/{repo}/"
 
-        # --- 3️⃣ Create or update repo locally ---
-        if not os.path.exists(repo_dir):
-            os.makedirs(repo_dir)
-        # Save a minimal HTML page based on brief (placeholder)
-        with open(os.path.join(repo_dir, "index.html"), "w") as f:
-            f.write(f"<html><body><h1>{brief}</h1></body></html>")
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    if round_num == 1:
+        create = requests.post(
+            "https://api.github.com/user/repos",
+            headers=headers,
+            json={"name": repo, "private": False}
+        )
+        if create.status_code >= 300 and create.status_code != 422:
+            return jsonify({"error": "Repo creation failed"}), 500
+    html = f"""
+    <html>
+      <body>
+        <h1>{brief}</h1>
+      </body>
+    </html>
+    """
 
-        # --- 4️⃣ Handle attachments ---
-        decode_attachments(attachments, repo_dir)
+    commit_sha1 = github_put_file(repo, "index.html", html, f"Round {round_num} update")
+    readme = f"# {repo}\n\n{brief}\n\nMIT License"
+    commit_sha2 = github_put_file(repo, "README.md", readme, "Update README")
+    license_txt = f"""MIT License
 
-        # --- 5️⃣ Write README.md ---
-        readme_text = f"# {repo_name}\n\n{brief}\n\nMIT License"
-        with open(os.path.join(repo_dir, "README.md"), "w") as f:
-            f.write(readme_text)
+Copyright (c) 2025 {GITHUB_USER}
 
-        # --- 6️⃣ Add MIT LICENSE ---
-        mit_text = """MIT License
-
-Copyright (c) 2025 {user}
-
-Permission is hereby granted, free of charge, to any person...
+Permission is hereby granted, free of charge, to any person obtaining a copy...
 """
-        with open(os.path.join(repo_dir, "LICENSE"), "w") as f:
-            f.write(mit_text.replace("{user}", GITHUB_USER))
+    commit_sha3 = github_put_file(repo, "LICENSE", license_txt, "Add MIT License")
+    if round_num == 1:
+        enable_pages(repo)
+    commit_sha = commit_sha3
+    notify = {
+        "email": email,
+        "task": task,
+        "round": round_num,
+        "nonce": nonce,
+        "repo_url": repo_url,
+        "commit_sha": commit_sha,
+        "pages_url": pages_url
+    }
 
-        # --- 7️⃣ Push to GitHub ---
-        # Using GitHub API to create/update repo
-        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
-        repo_api = f"https://api.github.com/repos/{GITHUB_USER}/{repo_name}"
-        res = requests.get(repo_api, headers=headers)
-        if res.status_code == 404:
-            # Create repo
-            data = {"name": repo_name, "private": False, "auto_init": True}
-            r = requests.post("https://api.github.com/user/repos", headers=headers, json=data)
-            if r.status_code >= 300:
-                return jsonify({"error": f"GitHub repo creation failed: {r.text}"}), 500
-        # Commit files using PyGithub or direct API (simplified here as note)
-        # In practice, you may use git CLI or PyGithub to push all files
+    try:
+        requests.post(evaluation_url, json=notify, timeout=5)
+    except:
+        pass
 
-        # --- 8️⃣ Notify evaluation URL ---
-        if evaluation_url:
-            payload = {
-                "email": email,
-                "task": task,
-                "round": round_num,
-                "nonce": nonce,
-                "repo_url": f"https://github.com/{GITHUB_USER}/{repo_name}",
-                "commit_sha": "latest",
-                "pages_url": pages_url
-            }
-            try:
-                r = requests.post(evaluation_url, json=payload, headers={"Content-Type": "application/json"})
-                r.raise_for_status()
-            except Exception as e:
-                print("Evaluation notify failed:", e)
-
-        # --- 9️⃣ Log the task ---
-        log_entry = {
-            "email": email,
-            "task": task,
-            "round": round_num,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "repo_url": f"https://github.com/{GITHUB_USER}/{repo_name}",
-            "pages_url": pages_url
-        }
-        save_tasks_log(log_entry)
-
-        return jsonify({
-            "repo_name": repo_name,
-            "round": round_num,
-            "status": "updated" if round_num == 2 else "accepted",
-            "url": pages_url
-        }), 200
-
-    except Exception as e:
-        print("Internal error:", e)
-        return jsonify({"error": str(e)}), 500
+    return jsonify({
+        "repo_name": repo,
+        "round": round_num,
+        "status": "ok",
+        "repo_url": repo_url,
+        "pages_url": pages_url,
+        "commit_sha": commit_sha
+    }), 200
 
 
-# --- Run ---
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run()
